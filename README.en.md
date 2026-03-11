@@ -9,6 +9,7 @@ A modern visual debugging tool that provides an intuitive graphical interface fo
 ## Features
 
 - **Binary Loading** - Load and parse executable files
+- **Attach Process Debugging** - Attach by PID or process name to a running process
 - **Breakpoint Management** - Set, delete, and manage breakpoints
 - **Execution Control** - Step execution, continue, pause debugging
 - **Register Inspection** - Real-time view and monitor CPU register states
@@ -67,6 +68,15 @@ Build outputs:
 
 A GitHub Actions workflow is also included at `.github/workflows/build-macos-client.yml` so you can generate macOS artifacts from the Actions page.
 
+### CI/CD Triggers and Publishing
+
+- `pull_request`: validate workflow and build contract
+- `push` to `main/master`: build dual-arch artifacts
+- `push` tag (`v*`) or publish Release: upload x64/arm64 assets to GitHub Release
+- `workflow_dispatch`: manual run with optional `features` and publish switch
+
+See full details: [`docs/ci-cd.md`](./docs/ci-cd.md)
+
 ## Quick Start
 
 Run the debugger:
@@ -77,8 +87,24 @@ cargo run --release
 
 After launching, use the graphical interface:
 1. Click the "Load Binary" button to select an executable file to debug
-2. Set breakpoints and start debugging
-3. Use the control panel for step execution, continue, and other operations
+2. Or select PID/process name in the control bar and click Attach
+3. Set breakpoints and start debugging
+4. Use the control panel for step execution, continue, and other operations
+
+### Attach Preconditions and Troubleshooting
+
+Prerequisites:
+
+- LLDB is available on host (for `real-lldb` mode)
+- Attach permission chain is satisfied (for macOS this often involves `task_for_pid`)
+- PID/process name is valid and target process exists
+
+Common attach error categories:
+
+- `permission_denied`: insufficient permission
+- `target_not_found`: target PID/name does not exist
+- `timeout`: attach operation timed out
+- `lldb_error`: uncategorized LLDB-side failure
 
 ## Documentation
 
@@ -93,6 +119,10 @@ For detailed technical specifications and usage instructions, please refer to:
 - [Execution Visualization](./openspec/specs/execution-visualization/spec.md)
 - [LLDB Integration](./openspec/specs/lldb-integration/spec.md)
 - [UI Framework](./openspec/specs/ui-framework/spec.md)
+- [x64dbg Parity Baseline](./docs/ui/x64dbg-parity-baseline.md)
+- [x64dbg Reuse Feasibility and Deltas](./docs/ui/x64dbg-reuse-feasibility.md)
+- [x64dbg Rewrite Regression Checklist](./docs/ui/x64dbg-regression-checklist.md)
+- [CI/CD Guide](./docs/ci-cd.md)
 
 ## Contributing
 

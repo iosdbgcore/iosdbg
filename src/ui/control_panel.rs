@@ -2,11 +2,35 @@ use std::path::PathBuf;
 
 use egui::{Color32, RichText};
 
-use crate::types::ExecutionState;
+use crate::types::{AttachRequest, ExecutionState};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttachMode {
+    Pid,
+    ProcessName,
+}
+
+#[derive(Debug, Clone)]
+pub struct ControlPanelState {
+    pub attach_mode: AttachMode,
+    pub pid_input: String,
+    pub process_name_input: String,
+}
+
+impl Default for ControlPanelState {
+    fn default() -> Self {
+        Self {
+            attach_mode: AttachMode::Pid,
+            pid_input: String::new(),
+            process_name_input: String::new(),
+        }
+    }
+}
 
 #[derive(Default)]
 pub struct ControlPanelResponse {
     pub load_binary: Option<PathBuf>,
+    pub attach_request: Option<AttachRequest>,
     pub step_in: bool,
     pub step_over: bool,
     pub continue_exec: bool,
@@ -15,8 +39,10 @@ pub struct ControlPanelResponse {
 
 pub fn show_control_panel(
     ui: &mut egui::Ui,
+    state: &mut ControlPanelState,
     execution_state: ExecutionState,
     loaded_binary: Option<&PathBuf>,
+    attached_target: Option<&str>,
 ) -> ControlPanelResponse {
     let mut response = ControlPanelResponse::default();
 
@@ -26,8 +52,59 @@ pub fn show_control_panel(
         }
 
         ui.separator();
+        ui.label(RichText::new("Attach").strong());
 
-        let has_target = loaded_binary.is_some();
+        ui.radio_value(&mut state.attach_mode, AttachMode::Pid, "PID");
+        ui.radio_value(&mut state.attach_mode, AttachMode::ProcessName, "Process");
+
+        let attach_request = match state.attach_mode {
+            AttachMode::Pid => {
+                let edit = ui.add(
+                    egui::TextEdit::singleline(&mut state.pid_input)
+                        .hint_text("pid")
+                        .desired_width(90.0),
+                );
+                if edit.changed() {
+                    state.process_name_input.clear();
+                }
+                derive_attach_request(
+                    state.attach_mode,
+                    &state.pid_input,
+                    &state.process_name_input,
+                )
+            }
+            AttachMode::ProcessName => {
+                let edit = ui.add(
+                    egui::TextEdit::singleline(&mut state.process_name_input)
+                        .hint_text("process name")
+                        .desired_width(140.0),
+                );
+                if edit.changed() {
+                    state.pid_input.clear();
+                }
+                derive_attach_request(
+                    state.attach_mode,
+                    &state.pid_input,
+                    &state.process_name_input,
+                )
+            }
+        };
+
+        let attach_label = if attach_request.is_some() {
+            "Attach"
+        } else {
+            "Attach (disabled)"
+        };
+        if ui
+            .add_enabled(attach_request.is_some(), egui::Button::new(attach_label))
+            .clicked()
+        {
+            response.attach_request = attach_request;
+        }
+
+        ui.separator();
+
+        let has_target = loaded_binary.is_some() || attached_target.is_some();
         if ui
             .add_enabled(has_target, egui::Button::new("Step In"))
             .clicked()
@@ -57,18 +134,42 @@ pub fn show_control_panel(
         let (label, color) = state_badge(execution_state);
         ui.label(RichText::new(label).strong().color(color));
 
-        if let Some(path) = loaded_binary {
+        if let Some(target) = attached_target {
+            ui.monospace(RichText::new(target).color(Color32::from_rgb(175, 193, 208)));
+        } else if let Some(path) = loaded_binary {
             ui.monospace(
                 RichText::new(path.display().to_string()).color(Color32::from_rgb(175, 193, 208)),
             );
         } else {
             ui.monospace(
-                RichText::new("No binary loaded").color(Color32::from_rgb(122, 138, 150)),
+                RichText::new("No target attached").color(Color32::from_rgb(122, 138, 150)),
             );
         }
     });
 
     response
+}
+
+fn derive_attach_request(
+    mode: AttachMode,
+    pid_input: &str,
+    process_name_input: &str,
+) -> Option<AttachRequest> {
+    match mode {
+        AttachMode::Pid => pid_input
+            .trim()
+            .parse::<u32>()
+            .ok()
+            .map(AttachRequest::by_pid),
+        AttachMode::ProcessName => {
+            let name = process_name_input.trim();
+            if name.is_empty() {
+                None
+            } else {
+                Some(AttachRequest::by_process_name(name.to_string()))
+            }
+        }
+    }
 }
 
 fn state_badge(state: ExecutionState) -> (&'static str, Color32) {
@@ -78,5 +179,24 @@ fn state_badge(state: ExecutionState) -> (&'static str, Color32) {
         ExecutionState::Running => ("State: Running", Color32::from_rgb(135, 218, 129)),
         ExecutionState::Paused => ("State: Paused", Color32::from_rgb(243, 209, 121)),
         ExecutionState::Exited => ("State: Exited", Color32::from_rgb(242, 142, 142)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{derive_attach_request, AttachMode};
+    use crate::types::AttachTarget;
+
+    #[test]
+    fn derives_pid_attach_request_for_numeric_input() {
+        let request = derive_attach_request(AttachMode::Pid, "1234", "")
+            .expect("numeric pid should produce attach request");
+        assert!(matches!(request.target, AttachTarget::Pid(1234)));
+    }
+
+    #[test]
+    fn rejects_blank_process_name_for_attach_request() {
+        let request = derive_attach_request(AttachMode::ProcessName, "", "   ");
+        assert!(request.is_none());
     }
 }

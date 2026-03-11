@@ -14,6 +14,8 @@ Options:
   --universal             Build both macOS targets and merge with lipo
   --profile <name>        Cargo profile to use (default: release)
   --features <list>       Cargo feature list, e.g. "real-lldb"
+  --output-dir <path>     Output directory for .app and zip (default: dist/macos)
+  --artifact-prefix <id>  Zip filename prefix (default: package name)
   --bundle-id <id>        macOS bundle identifier (default: com.iosdbg.visualdebugger)
   --app-name <name>       App display name (default: Rust LLDB Visual Debugger)
   -h, --help              Show this help message
@@ -38,6 +40,8 @@ PROFILE="release"
 FEATURES=""
 TARGET=""
 UNIVERSAL=0
+OUTPUT_DIR="dist/macos"
+ARTIFACT_PREFIX=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -55,6 +59,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --features)
       FEATURES="${2:-}"
+      shift 2
+      ;;
+    --output-dir)
+      OUTPUT_DIR="${2:-}"
+      shift 2
+      ;;
+    --artifact-prefix)
+      ARTIFACT_PREFIX="${2:-}"
       shift 2
       ;;
     --bundle-id)
@@ -76,6 +88,10 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if [[ -z "${ARTIFACT_PREFIX}" ]]; then
+  ARTIFACT_PREFIX="${PACKAGE_NAME}"
+fi
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
   echo "This script must run on macOS (Darwin)." >&2
@@ -113,8 +129,8 @@ build_target() {
   "${cmd[@]}"
 }
 
-mkdir -p dist/macos
-APP_DIR="dist/macos/${APP_NAME}.app"
+mkdir -p "${OUTPUT_DIR}"
+APP_DIR="${OUTPUT_DIR}/${APP_NAME}.app"
 rm -rf "${APP_DIR}"
 mkdir -p "${APP_DIR}/Contents/MacOS"
 mkdir -p "${APP_DIR}/Contents/Resources"
@@ -165,7 +181,7 @@ cat > "${APP_DIR}/Contents/Info.plist" <<EOF
 </plist>
 EOF
 
-ZIP_PATH="dist/macos/${PACKAGE_NAME}-${VERSION}-${ARTIFACT_TARGET}.zip"
+ZIP_PATH="${OUTPUT_DIR}/${ARTIFACT_PREFIX}-${VERSION}-${ARTIFACT_TARGET}.zip"
 rm -f "${ZIP_PATH}"
 /usr/bin/ditto -c -k --sequesterRsrc --keepParent "${APP_DIR}" "${ZIP_PATH}"
 

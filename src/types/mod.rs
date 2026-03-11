@@ -2,6 +2,83 @@ use std::collections::HashSet;
 use std::fmt;
 use std::path::PathBuf;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AttachTarget {
+    Pid(u32),
+    ProcessName(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AttachRequest {
+    pub target: AttachTarget,
+}
+
+impl AttachRequest {
+    pub fn by_pid(pid: u32) -> Self {
+        Self {
+            target: AttachTarget::Pid(pid),
+        }
+    }
+
+    pub fn by_process_name(name: impl Into<String>) -> Self {
+        Self {
+            target: AttachTarget::ProcessName(name.into()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttachErrorKind {
+    PermissionDenied,
+    TargetNotFound,
+    Timeout,
+    LldbError,
+}
+
+impl fmt::Display for AttachErrorKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let text = match self {
+            AttachErrorKind::PermissionDenied => "permission_denied",
+            AttachErrorKind::TargetNotFound => "target_not_found",
+            AttachErrorKind::Timeout => "timeout",
+            AttachErrorKind::LldbError => "lldb_error",
+        };
+        write!(f, "{text}")
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AttachResult {
+    pub attached: bool,
+    pub target_label: String,
+    pub error: Option<AttachErrorKind>,
+    pub message: String,
+}
+
+impl AttachResult {
+    pub fn success(target_label: impl Into<String>) -> Self {
+        Self {
+            attached: true,
+            target_label: target_label.into(),
+            error: None,
+            message: "Attached successfully".to_string(),
+        }
+    }
+
+    pub fn failure(
+        target_label: impl Into<String>,
+        error: AttachErrorKind,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            attached: false,
+            target_label: target_label.into(),
+            error: Some(error),
+            message: message.into(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExecutionState {
     NoTarget,
@@ -46,6 +123,7 @@ pub struct MemorySnapshot {
 #[derive(Debug, Clone)]
 pub struct DebuggerSnapshot {
     pub binary_path: Option<PathBuf>,
+    pub attached_target: Option<String>,
     pub state: ExecutionState,
     pub current_pc: Option<u64>,
     pub instructions: Vec<AssemblyInstruction>,
@@ -57,6 +135,7 @@ pub struct DebuggerSnapshot {
 #[derive(Debug, Clone)]
 pub enum DebugCommand {
     LoadBinary(PathBuf),
+    AttachProcess(AttachRequest),
     StepIn,
     StepOver,
     Continue,

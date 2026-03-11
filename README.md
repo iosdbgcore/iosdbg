@@ -9,6 +9,7 @@
 ## 功能特性
 
 - **二进制加载** - 支持加载和解析可执行文件
+- **附加进程调试** - 支持按 PID 或进程名附加到运行中进程
 - **断点管理** - 设置、删除和管理断点
 - **执行控制** - 单步执行、继续运行、暂停调试
 - **寄存器查看** - 实时查看和监控 CPU 寄存器状态
@@ -67,6 +68,15 @@ cargo build --release --features real-lldb
 
 另外仓库已提供 GitHub Actions 工作流：`.github/workflows/build-macos-client.yml`，可在 Actions 页面一键生成 macOS 客户端。
 
+### CI/CD 触发与发布
+
+- `pull_request`：校验工作流与构建配置
+- `push` 到 `main/master`：生成双架构构建产物
+- `push` tag（`v*`）或发布 Release：自动上传 x64/arm64 资产到 GitHub Release
+- 手动触发：支持 `workflow_dispatch`，可传入 `features` 和发布开关
+
+详细规则见：[`docs/ci-cd.md`](./docs/ci-cd.md)
+
 ## 快速开始
 
 运行调试器：
@@ -77,8 +87,24 @@ cargo run --release
 
 启动后，使用图形界面：
 1. 点击"加载二进制"按钮选择要调试的可执行文件
-2. 设置断点并开始调试
-3. 使用控制面板进行单步执行、继续运行等操作
+2. 或在控制栏中选择 PID/进程名后点击 Attach，附加到运行中的目标进程
+3. 设置断点并开始调试
+4. 使用控制面板进行单步执行、继续运行等操作
+
+### 附加调试前置条件与排障
+
+前置条件：
+
+- 目标系统可用 LLDB（`real-lldb` 场景）
+- 具备附加权限（macOS 下通常与 `task_for_pid` 权限链相关）
+- PID 或进程名有效且目标进程存在
+
+常见错误分类：
+
+- `permission_denied`：权限不足，需检查系统授权与运行方式
+- `target_not_found`：PID/进程名无效或进程已退出
+- `timeout`：附加请求超时，可重试并检查系统负载
+- `lldb_error`：LLDB 返回未分类错误，建议查看日志
 
 ## 使用文档
 
@@ -93,6 +119,10 @@ cargo run --release
 - [执行可视化](./openspec/specs/execution-visualization/spec.md)
 - [LLDB 集成](./openspec/specs/lldb-integration/spec.md)
 - [UI 框架](./openspec/specs/ui-framework/spec.md)
+- [x64dbg 同构 UI 基线](./docs/ui/x64dbg-parity-baseline.md)
+- [x64dbg 复用可行性与差异说明](./docs/ui/x64dbg-reuse-feasibility.md)
+- [x64dbg 重写回归检查清单](./docs/ui/x64dbg-regression-checklist.md)
+- [CI/CD 指南](./docs/ci-cd.md)
 
 ## 贡献指南
 

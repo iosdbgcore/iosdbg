@@ -5,12 +5,20 @@ use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 use eframe::egui;
 
 use crate::core::events::DebugEvent;
+use crate::core::types::SessionLifecycle;
 use crate::core::{spawn_debugger_core, CoreChannels};
-use crate::types::{AssemblyInstruction, DebugCommand, ExecutionState, RegisterValue};
+use crate::types::{
+    AssemblyInstruction, AttachErrorKind, DebugCommand, ExecutionState, RegisterValue,
+};
 use crate::ui::assembly_view::show_assembly_view;
-use crate::ui::control_panel::show_control_panel;
+use crate::ui::control_panel::{show_control_panel, ControlPanelState};
+use crate::ui::layout::{
+    EguiParityAdapter, UiParityAdapter, PANEL_ASSEMBLY, PANEL_MEMORY, PANEL_REGISTERS,
+};
 use crate::ui::memory_viewer::{show_memory_viewer, MemoryViewerState};
 use crate::ui::register_panel::show_register_panel;
+use crate::ui::status_bar::show_status_bar;
+use crate::ui::style::apply_x64dbg_theme;
 
 pub struct DebuggerApp {
     command_tx: Sender<DebugCommand>,
@@ -24,7 +32,11 @@ pub struct DebuggerApp {
     memory_address: u64,
     memory_bytes: Vec<u8>,
     memory_viewer_state: MemoryViewerState,
+    control_panel_state: ControlPanelState,
     status_message: Option<String>,
+    attach_lifecycle: SessionLifecycle,
+    attach_error: Option<AttachErrorKind>,
+    attached_target: Option<String>,
 }
 
 impl DebuggerApp {
@@ -46,7 +58,11 @@ impl DebuggerApp {
             memory_address: 0x1000,
             memory_bytes: vec![0; 0x100],
             memory_viewer_state: MemoryViewerState::new(),
+            control_panel_state: ControlPanelState::default(),
             status_message: Some("Ready. Load a processed binary to start debugging.".to_string()),
+            attach_lifecycle: SessionLifecycle::Detached,
+            attach_error: None,
+            attached_target: None,
         }
     }
 
@@ -71,7 +87,22 @@ impl DebuggerApp {
         match event {
             DebugEvent::TargetLoaded(path) => {
                 self.loaded_binary = Some(path.clone());
+                self.attached_target = None;
+                self.attach_error = None;
                 self.status_message = Some(format!("Loaded target: {}", path.display()));
+            }
+            DebugEvent::AttachUpdated(result) => {
+                if result.attached {
+                    self.attached_target = Some(result.target_label);
+                    self.loaded_binary = None;
+                    self.attach_error = None;
+                } else {
+                    self.attach_error = result.error;
+                }
+                self.status_message = Some(result.message);
+            }
+            DebugEvent::AttachLifecycleChanged(lifecycle) => {
+                self.attach_lifecycle = lifecycle;
             }
             DebugEvent::AssemblyUpdated(instructions) => {
                 self.instructions = instructions;
@@ -105,74 +136,100 @@ impl DebuggerApp {
 impl eframe::App for DebuggerApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_events();
+        apply_x64dbg_theme(ctx);
 
         egui::TopBottomPanel::top("control-panel").show(ctx, |ui| {
-            let controls = show_control_panel(ui, self.execution_state, self.loaded_binary.as_ref());
+            ui.push_id("panel-control", |ui| {
+                let controls = show_control_panel(
+                    ui,
+                    &mut self.control_panel_state,
+                    self.execution_state,
+                    self.loaded_binary.as_ref(),
+                    self.attached_target.as_deref(),
+                );
 
-            if let Some(path) = controls.load_binary {
-                self.send_command(DebugCommand::LoadBinary(path));
-            }
-            if controls.step_in {
-                self.send_command(DebugCommand::StepIn);
-            }
-            if controls.step_over {
-                self.send_command(DebugCommand::StepOver);
-            }
-            if controls.continue_exec {
-                self.send_command(DebugCommand::Continue);
-            }
-            if controls.refresh_state {
-                self.send_command(DebugCommand::RefreshState);
-            }
+                if let Some(path) = controls.load_binary {
+                    self.send_command(DebugCommand::LoadBinary(path));
+                }
+                if let Some(request) = controls.attach_request {
+                    self.send_command(DebugCommand::AttachProcess(request));
+                }
+                if controls.step_in {
+                    self.send_command(DebugCommand::StepIn);
+                }
+                if controls.step_over {
+                    self.send_command(DebugCommand::StepOver);
+                }
+                if controls.continue_exec {
+                    self.send_command(DebugCommand::Continue);
+                }
+                if controls.refresh_state {
+                    self.send_command(DebugCommand::RefreshState);
+                }
+            });
         });
 
         egui::TopBottomPanel::bottom("status-bar")
             .resizable(false)
             .show(ctx, |ui| {
-                if let Some(message) = &self.status_message {
-                    ui.label(message);
-                }
+                show_status_bar(
+                    ui,
+                    self.status_message.as_deref(),
+                    self.attach_lifecycle,
+                    self.attach_error,
+                    self.attached_target.as_deref(),
+                );
             });
 
         egui::CentralPanel::default().show(ctx, |ui| {
             let available_width = ui.available_width();
             let available_height = ui.available_height();
-            let left_width = available_width * 0.6;
+            let layout = EguiParityAdapter.dock_layout();
+            let left_width = available_width * layout.left_width_ratio;
             let right_width = (available_width - left_width - 8.0).max(100.0);
 
             ui.horizontal(|ui| {
                 ui.allocate_ui(egui::vec2(left_width, available_height), |ui| {
-                    if let Some(address) = show_assembly_view(
-                        ui,
-                        &self.instructions,
-                        self.current_pc,
-                        &self.breakpoints,
-                    ) {
-                        self.send_command(DebugCommand::ToggleBreakpoint(address));
-                    }
+                    ui.push_id(PANEL_ASSEMBLY, |ui| {
+                        if let Some(address) = show_assembly_view(
+                            ui,
+                            &self.instructions,
+                            self.current_pc,
+                            &self.breakpoints,
+                        ) {
+                            self.send_command(DebugCommand::ToggleBreakpoint(address));
+                        }
+                    });
                 });
 
                 ui.separator();
 
                 ui.allocate_ui(egui::vec2(right_width, available_height), |ui| {
-                    let register_height = available_height * 0.42;
+                    let register_height = available_height * layout.right_top_ratio;
                     ui.allocate_ui(egui::vec2(right_width, register_height), |ui| {
-                        show_register_panel(ui, &self.registers);
+                        ui.push_id(PANEL_REGISTERS, |ui| {
+                            show_register_panel(ui, &self.registers);
+                        });
                     });
                     ui.separator();
-                    ui.allocate_ui(egui::vec2(right_width, available_height - register_height), |ui| {
-                        if let Some(address) = show_memory_viewer(
-                            ui,
-                            &mut self.memory_viewer_state,
-                            self.memory_address,
-                            &self.memory_bytes,
-                        ) {
-                            self.send_command(DebugCommand::ReadMemory {
-                                address,
-                                size: self.memory_viewer_state.page_size(),
+                    ui.allocate_ui(
+                        egui::vec2(right_width, available_height - register_height),
+                        |ui| {
+                            ui.push_id(PANEL_MEMORY, |ui| {
+                                if let Some(address) = show_memory_viewer(
+                                    ui,
+                                    &mut self.memory_viewer_state,
+                                    self.memory_address,
+                                    &self.memory_bytes,
+                                ) {
+                                    self.send_command(DebugCommand::ReadMemory {
+                                        address,
+                                        size: self.memory_viewer_state.page_size(),
+                                    });
+                                }
                             });
-                        }
-                    });
+                        },
+                    );
                 });
             });
         });

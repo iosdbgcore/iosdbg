@@ -32,7 +32,8 @@ pub fn show_memory_viewer(
     ui.horizontal(|ui| {
         ui.label("Address");
         let response = ui.text_edit_singleline(&mut state.address_input);
-        let enter_pressed = response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
+        let enter_pressed =
+            response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
 
         if ui.button("Read").clicked() || enter_pressed {
             if let Some(parsed) = parse_address(&state.address_input) {
@@ -70,7 +71,11 @@ pub fn show_memory_viewer(
                 .iter()
                 .map(|byte| {
                     let ch = *byte as char;
-                    if ch.is_ascii_graphic() { ch } else { '.' }
+                    if ch.is_ascii_graphic() {
+                        ch
+                    } else {
+                        '.'
+                    }
                 })
                 .collect::<String>();
 

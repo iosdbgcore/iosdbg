@@ -7,15 +7,34 @@ on:
         description: Cargo features to enable (for example real-lldb)
         required: false
         default: ""
+      publish_release:
+        description: Also publish assets to GitHub Release (requires tag context)
+        required: false
+        default: false
+        type: boolean
   push:
     branches:
       - master
       - main
+    tags:
+      - "v*"
     paths:
       - Cargo.toml
       - src/**
       - scripts/build_macos_client.sh
       - .github/workflows/build-macos-client.yml
+  pull_request:
+    paths:
+      - Cargo.toml
+      - src/**
+      - scripts/build_macos_client.sh
+      - .github/workflows/build-macos-client.yml
+  release:
+    types:
+      - published
+
+permissions:
+  contents: read
 
 jobs:
   build:
@@ -25,8 +44,8 @@ jobs:
       fail-fast: false
       matrix:
         target:
-          - aarch64-apple-darwin
           - x86_64-apple-darwin
+          - aarch64-apple-darwin
 
     steps:
       - name: Checkout
@@ -38,18 +57,125 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Build and package app
+        id: package
         shell: bash
         run: |
+          set -euo pipefail
           chmod +x scripts/build_macos_client.sh
           FEATURES="${{ github.event.inputs.features }}"
           if [[ -n "${FEATURES}" ]]; then
-            scripts/build_macos_client.sh --target "${{ matrix.target }}" --features "${FEATURES}"
+            scripts/build_macos_client.sh \
+              --target "${{ matrix.target }}" \
+              --features "${FEATURES}" \
+              --output-dir "dist/macos/${{ matrix.target }}"
           else
-            scripts/build_macos_client.sh --target "${{ matrix.target }}"
+            scripts/build_macos_client.sh \
+              --target "${{ matrix.target }}" \
+              --output-dir "dist/macos/${{ matrix.target }}"
           fi
+
+          ARTIFACT_PATH=$(ls "dist/macos/${{ matrix.target }}"/*.zip | head -n 1)
+          echo "artifact_path=${ARTIFACT_PATH}" >> "$GITHUB_OUTPUT"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: macos-client-${{ matrix.target }}
-          path: dist/macos/*.zip
+          path: ${{ steps.package.outputs.artifact_path }}
+
+      - name: Workflow summary
+        shell: bash
+        run: |
+          {
+            echo "## macOS build summary"
+            echo "- Target: \\`${{ matrix.target }}\\`"
+            echo "- Commit: \\`${{ github.sha }}\\`"
+            echo "- Run ID: \\`${{ github.run_id }}\\`"
+            echo "- Artifact: \\`${{ steps.package.outputs.artifact_path }}\\`"
+            echo "- Run URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  validate-workflow:
+    name: validate-workflow
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate workflow contract
+        shell: bash
+        run: |
+          chmod +x scripts/validate_ci_workflow.sh
+          scripts/validate_ci_workflow.sh
+
+      - name: Smoke-test release asset verification
+        shell: bash
+        run: |
+          chmod +x scripts/smoke_release_publish.sh
+          scripts/smoke_release_publish.sh
+
+  publish-release:
+    name: publish-release
+    runs-on: ubuntu-latest
+    needs:
+      - build
+      - validate-workflow
+    if: >-
+      github.event_name == 'release' || startsWith(github.ref, 'refs/tags/') ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.publish_release == 'true')
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download x64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-client-x86_64-apple-darwin
+          path: dist/release/x86_64-apple-darwin
+
+      - name: Download arm64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-client-aarch64-apple-darwin
+          path: dist/release/aarch64-apple-darwin
+
+      - name: Verify release assets exist
+        id: verify
+        shell: bash
+        run: |
+          set -euo pipefail
+          x64_file=$(ls dist/release/x86_64-apple-darwin/rust-lldb-visual-debugger-*-x86_64-apple-darwin.zip 2>/dev/null | head -n 1 || true)
+          arm64_file=$(ls dist/release/aarch64-apple-darwin/rust-lldb-visual-debugger-*-aarch64-apple-darwin.zip 2>/dev/null | head -n 1 || true)
+
+          if [[ -z "${x64_file}" ]]; then
+            echo "::error::Missing x64 release asset"
+            exit 1
+          fi
+          if [[ -z "${arm64_file}" ]]; then
+            echo "::error::Missing arm64 release asset"
+            exit 1
+          fi
+
+          echo "x64_file=${x64_file}" >> "$GITHUB_OUTPUT"
+          echo "arm64_file=${arm64_file}" >> "$GITHUB_OUTPUT"
+
+      - name: Publish release assets
+        id: publish
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ steps.verify.outputs.x64_file }}
+            ${{ steps.verify.outputs.arm64_file }}
+          fail_on_unmatched_files: true
+
+      - name: Publish summary
+        shell: bash
+        run: |
+          {
+            echo "## Release publish summary"
+            echo "- Commit: \\`${{ github.sha }}\\`"
+            echo "- Run ID: \\`${{ github.run_id }}\\`"
+            echo "- x64 Asset: \\`${{ steps.verify.outputs.x64_file }}\\`"
+            echo "- arm64 Asset: \\`${{ steps.verify.outputs.arm64_file }}\\`"
+            echo "- Release URL: ${{ steps.publish.outputs.url }}"
+          } >> "$GITHUB_STEP_SUMMARY"

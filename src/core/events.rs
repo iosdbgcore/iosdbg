@@ -1,10 +1,13 @@
 use std::path::PathBuf;
 
-use crate::types::{AssemblyInstruction, ExecutionState, RegisterValue};
+use crate::core::types::SessionLifecycle;
+use crate::types::{AssemblyInstruction, AttachResult, ExecutionState, RegisterValue};
 
 #[derive(Debug, Clone)]
 pub enum DebugEvent {
     TargetLoaded(PathBuf),
+    AttachUpdated(AttachResult),
+    AttachLifecycleChanged(SessionLifecycle),
     AssemblyUpdated(Vec<AssemblyInstruction>),
     BreakpointsChanged(Vec<u64>),
     InstructionPointerChanged(Option<u64>),

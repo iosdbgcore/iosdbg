@@ -1,15 +1,19 @@
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use crate::core::session::LldbSession;
+use crate::core::types::{describe_attach_target, validate_attach_request, SessionLifecycle};
 use crate::types::{
-    AssemblyInstruction, CoreError, CoreResult, DebuggerSnapshot, ExecutionState, MemorySnapshot,
-    RegisterValue,
+    AssemblyInstruction, AttachErrorKind, AttachRequest, AttachResult, CoreError, CoreResult,
+    DebuggerSnapshot, ExecutionState, MemorySnapshot, RegisterValue,
 };
 
 pub trait DebugEngine: Send {
     fn load_binary(&mut self, binary_path: PathBuf) -> CoreResult<()>;
+    fn attach_process(&mut self, request: AttachRequest) -> CoreResult<AttachResult>;
+    fn attach_lifecycle(&self) -> SessionLifecycle;
     fn step_in(&mut self) -> CoreResult<Option<u64>>;
     fn step_over(&mut self) -> CoreResult<Option<u64>>;
     fn continue_exec(&mut self) -> CoreResult<Option<u64>>;
@@ -29,6 +33,7 @@ pub struct MockLldbEngine {
     pc_index: usize,
     state: ExecutionState,
     memory: MemorySnapshot,
+    attached_target_label: Option<String>,
 }
 
 impl MockLldbEngine {
@@ -45,6 +50,7 @@ impl MockLldbEngine {
                 address: 0x1000,
                 bytes: vec![0; 0x100],
             },
+            attached_target_label: None,
         })
     }
 
@@ -79,7 +85,7 @@ impl MockLldbEngine {
     }
 
     fn ensure_target(&self) -> CoreResult<()> {
-        if self.binary_path.is_none() {
+        if self.binary_path.is_none() && self.attached_target_label.is_none() {
             return Err(CoreError::new("No binary loaded"));
         }
         Ok(())
@@ -87,9 +93,10 @@ impl MockLldbEngine {
 
     fn refresh_state_window(&mut self) {
         let address = self.current_pc().unwrap_or(Self::base_address());
-        self.memory = self
-            .read_memory(address, 0x100)
-            .unwrap_or(MemorySnapshot { address, bytes: vec![] });
+        self.memory = self.read_memory(address, 0x100).unwrap_or(MemorySnapshot {
+            address,
+            bytes: vec![],
+        });
     }
 
     fn register_names() -> Vec<String> {
@@ -130,6 +137,70 @@ impl MockLldbEngine {
         self.state = ExecutionState::Paused;
         self.current_pc()
     }
+
+    fn disassembly_seed_from_target(target_label: &str) -> Vec<u8> {
+        let mut bytes = target_label.as_bytes().to_vec();
+        if bytes.is_empty() {
+            bytes = vec![0x90; 64];
+        }
+        while bytes.len() < 64 {
+            bytes.extend_from_slice(target_label.as_bytes());
+            if target_label.is_empty() {
+                bytes.push(0x90);
+            }
+        }
+        bytes.truncate(64);
+        bytes
+    }
+
+    fn process_exists_by_pid(pid: u32) -> bool {
+        if pid == std::process::id() {
+            return true;
+        }
+
+        Command::new("ps")
+            .args(["-p", &pid.to_string(), "-o", "pid="])
+            .output()
+            .map(|output| {
+                output.status.success()
+                    && !String::from_utf8_lossy(&output.stdout).trim().is_empty()
+            })
+            .unwrap_or(false)
+    }
+
+    fn process_exists_by_name(name: &str) -> bool {
+        let needle = name.trim().to_ascii_lowercase();
+        if needle.is_empty() {
+            return false;
+        }
+
+        Command::new("ps")
+            .args(["-A", "-o", "comm="])
+            .output()
+            .map(|output| {
+                if !output.status.success() {
+                    return false;
+                }
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                stdout
+                    .lines()
+                    .any(|line| line.trim().to_ascii_lowercase().contains(&needle))
+            })
+            .unwrap_or(false)
+    }
+
+    fn classify_attach_error(error_message: &str) -> AttachErrorKind {
+        let normalized = error_message.to_ascii_lowercase();
+        if normalized.contains("permission") || normalized.contains("task_for_pid") {
+            AttachErrorKind::PermissionDenied
+        } else if normalized.contains("timeout") {
+            AttachErrorKind::Timeout
+        } else if normalized.contains("not found") {
+            AttachErrorKind::TargetNotFound
+        } else {
+            AttachErrorKind::LldbError
+        }
+    }
 }
 
 impl DebugEngine for MockLldbEngine {
@@ -151,11 +222,59 @@ impl DebugEngine for MockLldbEngine {
         self.instructions = Self::decode_disassembly(&self.binary_bytes);
         self.breakpoints.clear();
         self.binary_path = Some(binary_path);
+        self.attached_target_label = None;
+        self.session.detach();
         self.pc_index = 0;
         self.state = ExecutionState::Paused;
         self.refresh_state_window();
 
         Ok(())
+    }
+
+    fn attach_process(&mut self, request: AttachRequest) -> CoreResult<AttachResult> {
+        if let Err(error_kind) = validate_attach_request(&request) {
+            return Ok(AttachResult::failure(
+                describe_attach_target(&request),
+                error_kind,
+                "Invalid attach target",
+            ));
+        }
+
+        let target_exists = match &request.target {
+            crate::types::AttachTarget::Pid(pid) => Self::process_exists_by_pid(*pid),
+            crate::types::AttachTarget::ProcessName(name) => Self::process_exists_by_name(name),
+        };
+        if !target_exists {
+            return Ok(AttachResult::failure(
+                describe_attach_target(&request),
+                AttachErrorKind::TargetNotFound,
+                "Target process not found",
+            ));
+        }
+
+        let target_label = describe_attach_target(&request);
+        match self.session.attach_to_process(&request) {
+            Ok(attached_target) => {
+                self.attached_target_label = Some(attached_target.clone());
+                self.binary_path = None;
+                self.binary_bytes = Self::disassembly_seed_from_target(&target_label);
+                self.instructions = Self::decode_disassembly(&self.binary_bytes);
+                self.breakpoints.clear();
+                self.pc_index = 0;
+                self.state = ExecutionState::Paused;
+                self.refresh_state_window();
+                Ok(AttachResult::success(attached_target))
+            }
+            Err(error) => Ok(AttachResult::failure(
+                target_label,
+                Self::classify_attach_error(&error.message),
+                error.message,
+            )),
+        }
+    }
+
+    fn attach_lifecycle(&self) -> SessionLifecycle {
+        self.session.lifecycle()
     }
 
     fn step_in(&mut self) -> CoreResult<Option<u64>> {
@@ -230,6 +349,7 @@ impl DebugEngine for MockLldbEngine {
     fn snapshot(&self) -> DebuggerSnapshot {
         DebuggerSnapshot {
             binary_path: self.binary_path.clone(),
+            attached_target: self.attached_target_label.clone(),
             state: self.state,
             current_pc: self.current_pc(),
             instructions: self.instructions.clone(),
@@ -243,10 +363,14 @@ impl DebugEngine for MockLldbEngine {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::thread;
+    use std::time::Duration;
 
     use tempfile::tempdir;
 
     use super::{DebugEngine, MockLldbEngine};
+    use crate::core::types::SessionLifecycle;
+    use crate::types::{AttachErrorKind, AttachRequest, ExecutionState};
 
     #[test]
     fn loads_arm64_sample_and_disassembles() {
@@ -256,8 +380,12 @@ mod tests {
         let arm64_sample = include_bytes!("../../tests/fixtures/sample_arm64.bin");
         fs::write(&binary_path, arm64_sample).expect("binary fixture write should succeed");
 
-        engine.load_binary(binary_path).expect("binary load should succeed");
-        let disassembly = engine.fetch_disassembly().expect("disassembly should be available");
+        engine
+            .load_binary(binary_path)
+            .expect("binary load should succeed");
+        let disassembly = engine
+            .fetch_disassembly()
+            .expect("disassembly should be available");
 
         assert!(!disassembly.is_empty());
         assert_eq!(disassembly[0].address, 0x1000);
@@ -268,10 +396,15 @@ mod tests {
         let mut engine = MockLldbEngine::new().expect("engine should initialize");
         let dir = tempdir().expect("tempdir should work");
         let binary_path = dir.path().join("sample.bin");
-        fs::write(&binary_path, [1, 2, 3, 4, 5, 6, 7, 8]).expect("binary fixture write should succeed");
-        engine.load_binary(binary_path).expect("binary load should succeed");
+        fs::write(&binary_path, [1, 2, 3, 4, 5, 6, 7, 8])
+            .expect("binary fixture write should succeed");
+        engine
+            .load_binary(binary_path)
+            .expect("binary load should succeed");
 
-        engine.toggle_breakpoint(0x1004).expect("set breakpoint should succeed");
+        engine
+            .toggle_breakpoint(0x1004)
+            .expect("set breakpoint should succeed");
         assert!(engine.snapshot().breakpoints.contains(&0x1004));
 
         engine
@@ -285,10 +418,16 @@ mod tests {
         let mut engine = MockLldbEngine::new().expect("engine should initialize");
         let dir = tempdir().expect("tempdir should work");
         let binary_path = dir.path().join("sample.bin");
-        fs::write(&binary_path, [10, 11, 12, 13, 14, 15, 16, 17]).expect("binary fixture write should succeed");
-        engine.load_binary(binary_path).expect("binary load should succeed");
+        fs::write(&binary_path, [10, 11, 12, 13, 14, 15, 16, 17])
+            .expect("binary fixture write should succeed");
+        engine
+            .load_binary(binary_path)
+            .expect("binary load should succeed");
 
-        let old_pc = engine.snapshot().current_pc.expect("pc should exist after load");
+        let old_pc = engine
+            .snapshot()
+            .current_pc
+            .expect("pc should exist after load");
         engine.step_in().expect("step should succeed");
         let new_pc = engine
             .snapshot()
@@ -297,10 +436,75 @@ mod tests {
 
         assert!(new_pc > old_pc);
 
-        let registers = engine.read_registers().expect("registers should be readable");
+        let registers = engine
+            .read_registers()
+            .expect("registers should be readable");
         assert_eq!(registers.iter().filter(|reg| reg.name == "pc").count(), 1);
 
-        let memory = engine.read_memory(new_pc, 0x40).expect("memory should be readable");
+        let memory = engine
+            .read_memory(new_pc, 0x40)
+            .expect("memory should be readable");
         assert_eq!(memory.bytes.len(), 0x40);
+    }
+
+    #[test]
+    fn attach_rejects_invalid_target() {
+        let mut engine = MockLldbEngine::new().expect("engine should initialize");
+        let result = engine
+            .attach_process(AttachRequest::by_process_name(" "))
+            .expect("attach command should return structured result");
+
+        assert!(!result.attached);
+        assert_eq!(result.error, Some(AttachErrorKind::TargetNotFound));
+    }
+
+    #[test]
+    fn attach_to_existing_pid_updates_lifecycle() {
+        let mut engine = MockLldbEngine::new().expect("engine should initialize");
+        let result = engine
+            .attach_process(AttachRequest::by_pid(std::process::id()))
+            .expect("attach should return result");
+
+        assert!(
+            result.attached,
+            "expected attach success: {}",
+            result.message
+        );
+        assert_eq!(engine.attach_lifecycle(), SessionLifecycle::Attached);
+        assert_eq!(engine.snapshot().state, ExecutionState::Paused);
+    }
+
+    #[test]
+    fn attach_to_unknown_pid_returns_target_not_found() {
+        let mut engine = MockLldbEngine::new().expect("engine should initialize");
+        let pid = u32::MAX - 1;
+        let result = engine
+            .attach_process(AttachRequest::by_pid(pid))
+            .expect("attach should return structured result");
+
+        assert!(!result.attached);
+        assert_eq!(result.error, Some(AttachErrorKind::TargetNotFound));
+    }
+
+    #[test]
+    fn attached_session_supports_step_and_continue_controls() {
+        let mut engine = MockLldbEngine::new().expect("engine should initialize");
+        let attach = engine
+            .attach_process(AttachRequest::by_pid(std::process::id()))
+            .expect("attach should return structured result");
+        assert!(attach.attached);
+
+        let first_pc = engine.snapshot().current_pc.expect("pc should exist");
+        let step_pc = engine
+            .step_in()
+            .expect("step should work")
+            .expect("pc should advance");
+        assert!(step_pc > first_pc);
+
+        engine
+            .toggle_breakpoint(step_pc + 4)
+            .expect("set breakpoint should work");
+        let _ = engine.continue_exec().expect("continue should work");
+        thread::sleep(Duration::from_millis(5));
     }
 }

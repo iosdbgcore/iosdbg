@@ -1,6 +1,7 @@
 pub mod engine;
 pub mod events;
 pub mod session;
+pub mod types;
 
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
@@ -33,6 +34,9 @@ impl DebuggerCore {
         let snapshot = self.engine.snapshot();
 
         self.send(DebugEvent::StateChanged(snapshot.state));
+        self.send(DebugEvent::AttachLifecycleChanged(
+            self.engine.attach_lifecycle(),
+        ));
         self.send(DebugEvent::InstructionPointerChanged(snapshot.current_pc));
         self.send(DebugEvent::AssemblyUpdated(snapshot.instructions));
 
@@ -47,7 +51,11 @@ impl DebuggerCore {
         });
     }
 
-    fn process_step_result(&mut self, step_result: CoreResult<Option<u64>>, emit_breakpoint_hit: bool) {
+    fn process_step_result(
+        &mut self,
+        step_result: CoreResult<Option<u64>>,
+        emit_breakpoint_hit: bool,
+    ) {
         match step_result {
             Ok(hit_address) => {
                 if emit_breakpoint_hit {
@@ -80,6 +88,27 @@ impl DebuggerCore {
                     Ok(()) => {
                         self.send(DebugEvent::TargetLoaded(path));
                         self.emit_snapshot();
+                    }
+                    Err(error) => self.send(DebugEvent::Error(error.message)),
+                }
+                true
+            }
+            DebugCommand::AttachProcess(request) => {
+                self.send(DebugEvent::AttachLifecycleChanged(
+                    types::SessionLifecycle::Attaching,
+                ));
+                match self.engine.attach_process(request) {
+                    Ok(result) => {
+                        self.send(DebugEvent::AttachLifecycleChanged(
+                            self.engine.attach_lifecycle(),
+                        ));
+                        self.send(DebugEvent::AttachUpdated(result.clone()));
+                        if result.attached {
+                            self.emit_snapshot();
+                        } else {
+                            // Keep existing snapshot untouched on failed attach; only surface diagnostics.
+                            self.send(DebugEvent::Error(result.message));
+                        }
                     }
                     Err(error) => self.send(DebugEvent::Error(error.message)),
                 }
@@ -138,13 +167,18 @@ pub fn spawn_debugger_core() -> CoreResult<CoreChannels> {
     let (command_tx, command_rx) = mpsc::channel::<DebugCommand>();
     let (event_tx, event_rx) = mpsc::channel::<DebugEvent>();
 
-    let mut engine = MockLldbEngine::new()?;
+    let engine = MockLldbEngine::new()?;
 
     // Prime the UI with a clean default state.
     let snapshot = engine.snapshot();
     event_tx
         .send(DebugEvent::StateChanged(snapshot.state))
         .map_err(|error| CoreError::new(format!("Failed to send initial state: {error}")))?;
+    event_tx
+        .send(DebugEvent::AttachLifecycleChanged(
+            engine.attach_lifecycle(),
+        ))
+        .map_err(|error| CoreError::new(format!("Failed to send initial attach state: {error}")))?;
 
     thread::spawn(move || {
         let mut core = DebuggerCore::new(Box::new(engine), event_tx);

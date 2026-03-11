@@ -1,9 +1,4 @@
-mod app;
-mod core;
-mod types;
-mod ui;
-
-use app::DebuggerApp;
+use rust_lldb_visual_debugger::app::DebuggerApp;
 
 fn main() -> eframe::Result<()> {
     let native_options = eframe::NativeOptions::default();

@@ -1,9 +1,4 @@
-# LLDB Integration
-
-## Purpose
-TBD
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Initialize LLDB session
 The system SHALL initialize an LLDB debugging session for the target binary, and SHALL support creating the session by launching a binary or attaching to a running process.
@@ -37,3 +32,23 @@ The system SHALL process LLDB events and update UI state accordingly, including 
 #### Scenario: Process attach failure event
 - **WHEN** LLDB attach operation fails
 - **THEN** system emits categorized error and keeps previous session state unchanged
+
+### 能力模型（Mermaid）
+
+```mermaid
+flowchart TD
+    A[用户调试动作] --> B{启动模式?}
+    B -->|加载二进制| C[Launch API]
+    B -->|附加进程| D[Attach API]
+    C --> E[会话事件处理]
+    D --> E
+    E --> F[UI状态更新]
+```
+
+### 功能需求表
+
+| 需求 | 类型 | 描述 | 验收场景 |
+|---|---|---|---|
+| Initialize LLDB session | MODIFIED | 支持 launch + attach 双会话入口 | Create debug session from binary / Create debug session from attach target |
+| Execute LLDB commands | MODIFIED | 在现有命令映射中纳入 attach API | Set breakpoint via LLDB / Execute attach command via LLDB |
+| Handle LLDB events | MODIFIED | 增加附加相关事件处理 | Process breakpoint event / Process attach failure event |

@@ -22,13 +22,13 @@ pub fn show_assembly_view(
                 let is_current = current_pc == Some(instruction.address);
                 let has_breakpoint = breakpoints.contains(&instruction.address);
 
-                let frame = egui::Frame::new()
+                let frame = egui::Frame::none()
                     .fill(if is_current {
                         Color32::from_rgb(42, 58, 74)
                     } else {
                         Color32::TRANSPARENT
                     })
-                    .inner_margin(egui::Margin::symmetric(6, 2));
+                    .inner_margin(egui::Margin::symmetric(6.0, 2.0));
 
                 frame.show(ui, |ui| {
                     ui.horizontal(|ui| {
