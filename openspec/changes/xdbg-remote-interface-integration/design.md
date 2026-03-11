@@ -95,6 +95,10 @@ sequenceDiagram
 - 原因：严格匹配“复用远程界面能力”的边界。
 - 结果：本次不引入新布局系统，不重构现有面板体系。
 
+5. 按钮子元素前景色与按钮背景色强制分离
+- 原因：避免按钮文字/图标与按钮底色一致导致可读性下降。
+- 规则：按钮背景色由状态驱动；按钮文字/图标采用独立前景色 token，且必须满足可识别对比。
+
 ## 详细组件架构（ASCII）
 
 ```text
@@ -173,6 +177,7 @@ sequenceDiagram
 | `src/app.rs` | 修改 | 启动时加载远程配置并注入 adapter | App Bootstrap |
 | `src/ui/control_panel.rs` | 修改 | 增加 endpoint 输入、Connect/Disconnect 按钮和动作透传入口 | UI Control |
 | `src/ui/status_bar.rs` | 修改 | 增加远程连接徽章与错误摘要文案 | UI Status |
+| `src/ui/style/mod.rs` | 修改 | 增加按钮前景色 token，约束子元素颜色不等于按钮底色 | UI Style |
 | `src/core/remote/xdbg_adapter.rs` | 新增 | 封装传输层、握手与命令调用（如仓库采用新文件） | Remote Adapter |
 | `tests/remote_integration.rs` | 新增 | 覆盖连接成功、超时、鉴权失败、命令映射 | Integration Test |
 | `docs/xdbg-remote-integration.md` | 新增 | 连接步骤、动作映射表、故障排查 | Docs |

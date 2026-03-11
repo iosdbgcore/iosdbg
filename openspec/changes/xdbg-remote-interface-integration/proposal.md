@@ -11,6 +11,7 @@
 - 新增基础调试动作映射：将 continue/step/pause/read-register/read-memory 等动作映射到 x64dbg 远程接口。
 - 新增最小化配置项：支持远程地址、超时、重试次数、鉴权令牌（如有）等参数。
 - 维持界面最小改动：仅保留“连接状态 + 连接入口 + 核心动作触发”，不新增自研复杂 UI。
+- 补充按钮子元素视觉约束：按钮内文字/图标颜色需与按钮背景形成对比，不与按钮底色相同。
 
 ### 高层级 UI 原型（最小化接入）
 
@@ -65,6 +66,7 @@ sequenceDiagram
 | `src/app.rs` | 修改 | 初始化远程配置并接入主流程 | 应用编排 |
 | `src/ui/control_panel.rs` | 修改 | 新增 endpoint 输入、连接状态、动作透传按钮 | 现有 UI 最小改动 |
 | `src/ui/status_bar.rs` | 修改 | 展示远程连接状态与错误摘要 | 状态反馈 |
+| `src/ui/style/mod.rs` | 修改 | 定义按钮前景色（文字/图标）与背景色分离规则 | UI 可读性 |
 | `docs/xdbg-remote-integration.md` | 新增 | 提供连接步骤与核心调试动作说明 | 文档 |
 
 ## Capabilities

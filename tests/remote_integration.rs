@@ -5,6 +5,8 @@ static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[test]
 fn remote_connect_success_path_reaches_connected_state() {
+    let _guard = ENV_LOCK.lock().expect("env lock should be available");
+    std::env::remove_var("IOSDBG_REMOTE_FORCE_TIMEOUT");
     let mut engine = MockLldbEngine::new().expect("engine should initialize");
     let status = engine
         .connect_remote(RemoteConfig {
@@ -40,6 +42,8 @@ fn remote_connect_timeout_is_classified() {
 
 #[test]
 fn remote_connect_auth_failure_is_classified() {
+    let _guard = ENV_LOCK.lock().expect("env lock should be available");
+    std::env::remove_var("IOSDBG_REMOTE_FORCE_TIMEOUT");
     let mut engine = MockLldbEngine::new().expect("engine should initialize");
     let status = engine
         .connect_remote(RemoteConfig {
@@ -56,6 +60,8 @@ fn remote_connect_auth_failure_is_classified() {
 
 #[test]
 fn remote_disconnect_then_reconnect_restores_session() {
+    let _guard = ENV_LOCK.lock().expect("env lock should be available");
+    std::env::remove_var("IOSDBG_REMOTE_FORCE_TIMEOUT");
     let mut engine = MockLldbEngine::new().expect("engine should initialize");
 
     let _ = engine
@@ -78,4 +84,3 @@ fn remote_disconnect_then_reconnect_restores_session() {
         .expect("reconnect should work");
     assert_eq!(status.state, RemoteSessionState::Connected);
 }
-
