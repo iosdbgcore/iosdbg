@@ -44,6 +44,29 @@ cargo build --release
 cargo build --release --features real-lldb
 ```
 
+## 生成 macOS 客户端
+
+项目提供了 `.app` 打包脚本（需在 macOS 上执行）：
+
+```bash
+./scripts/build_macos_client.sh --target aarch64-apple-darwin
+```
+
+常见用法：
+
+- 当前机器架构构建：`./scripts/build_macos_client.sh`
+- Intel 客户端：`./scripts/build_macos_client.sh --target x86_64-apple-darwin`
+- Apple Silicon 客户端：`./scripts/build_macos_client.sh --target aarch64-apple-darwin`
+- Universal2 客户端：`./scripts/build_macos_client.sh --universal`
+- 启用真实 LLDB：`./scripts/build_macos_client.sh --target aarch64-apple-darwin --features real-lldb`
+
+构建完成后产物位于：
+
+- `dist/macos/Rust LLDB Visual Debugger.app`
+- `dist/macos/rust-lldb-visual-debugger-<version>-<target>.zip`
+
+另外仓库已提供 GitHub Actions 工作流：`.github/workflows/build-macos-client.yml`，可在 Actions 页面一键生成 macOS 客户端。
+
 ## 快速开始
 
 运行调试器：

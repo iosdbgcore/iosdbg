@@ -44,6 +44,29 @@ cargo build --release
 cargo build --release --features real-lldb
 ```
 
+## Build macOS Client
+
+The repository includes an `.app` packaging script (must run on macOS):
+
+```bash
+./scripts/build_macos_client.sh --target aarch64-apple-darwin
+```
+
+Common usage:
+
+- Build for current machine architecture: `./scripts/build_macos_client.sh`
+- Intel macOS client: `./scripts/build_macos_client.sh --target x86_64-apple-darwin`
+- Apple Silicon client: `./scripts/build_macos_client.sh --target aarch64-apple-darwin`
+- Universal2 client: `./scripts/build_macos_client.sh --universal`
+- Enable real LLDB: `./scripts/build_macos_client.sh --target aarch64-apple-darwin --features real-lldb`
+
+Build outputs:
+
+- `dist/macos/Rust LLDB Visual Debugger.app`
+- `dist/macos/rust-lldb-visual-debugger-<version>-<target>.zip`
+
+A GitHub Actions workflow is also included at `.github/workflows/build-macos-client.yml` so you can generate macOS artifacts from the Actions page.
+
 ## Quick Start
 
 Run the debugger:
