@@ -47,6 +47,117 @@ impl fmt::Display for AttachErrorKind {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemoteSessionState {
+    Disconnected,
+    Connecting,
+    Connected,
+    Degraded,
+}
+
+impl fmt::Display for RemoteSessionState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let text = match self {
+            RemoteSessionState::Disconnected => "disconnected",
+            RemoteSessionState::Connecting => "connecting",
+            RemoteSessionState::Connected => "connected",
+            RemoteSessionState::Degraded => "degraded",
+        };
+        write!(f, "{text}")
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemoteErrorKind {
+    ConnectionFailed,
+    AuthFailed,
+    Timeout,
+    ProtocolError,
+}
+
+impl fmt::Display for RemoteErrorKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let text = match self {
+            RemoteErrorKind::ConnectionFailed => "connection_failed",
+            RemoteErrorKind::AuthFailed => "auth_failed",
+            RemoteErrorKind::Timeout => "timeout",
+            RemoteErrorKind::ProtocolError => "protocol_error",
+        };
+        write!(f, "{text}")
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteConfig {
+    pub endpoint: String,
+    pub token: Option<String>,
+    pub timeout_ms: u64,
+    pub retry_count: u8,
+}
+
+impl Default for RemoteConfig {
+    fn default() -> Self {
+        Self {
+            endpoint: "127.0.0.1:27400".to_string(),
+            token: None,
+            timeout_ms: 1200,
+            retry_count: 2,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteSessionStatus {
+    pub state: RemoteSessionState,
+    pub endpoint: Option<String>,
+    pub session_id: Option<String>,
+    pub error: Option<RemoteErrorKind>,
+    pub message: String,
+}
+
+impl RemoteSessionStatus {
+    pub fn disconnected() -> Self {
+        Self {
+            state: RemoteSessionState::Disconnected,
+            endpoint: None,
+            session_id: None,
+            error: None,
+            message: "Remote disconnected".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemoteCommand {
+    Continue,
+    StepOver,
+    StepIn,
+    Pause,
+    ReadRegisters,
+    ReadMemory { address: u64, size: usize },
+}
+
+impl RemoteCommand {
+    pub fn method_name(&self) -> &'static str {
+        match self {
+            RemoteCommand::Continue => "debug.continue",
+            RemoteCommand::StepOver => "debug.step_over",
+            RemoteCommand::StepIn => "debug.step_in",
+            RemoteCommand::Pause => "debug.pause",
+            RemoteCommand::ReadRegisters => "debug.read_registers",
+            RemoteCommand::ReadMemory { .. } => "debug.read_memory",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteCommandResult {
+    pub command: RemoteCommand,
+    pub success: bool,
+    pub error: Option<RemoteErrorKind>,
+    pub message: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AttachResult {
     pub attached: bool,
@@ -130,15 +241,20 @@ pub struct DebuggerSnapshot {
     pub breakpoints: HashSet<u64>,
     pub registers: Vec<RegisterValue>,
     pub memory: MemorySnapshot,
+    pub remote: RemoteSessionStatus,
 }
 
 #[derive(Debug, Clone)]
 pub enum DebugCommand {
     LoadBinary(PathBuf),
     AttachProcess(AttachRequest),
+    ConnectRemote(RemoteConfig),
+    DisconnectRemote,
     StepIn,
     StepOver,
     Continue,
+    Pause,
+    ReadRegisters,
     ToggleBreakpoint(u64),
     RefreshState,
     ReadMemory { address: u64, size: usize },

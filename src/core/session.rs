@@ -2,7 +2,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::core::types::{describe_attach_target, SessionLifecycle, SessionStateMachine};
-use crate::types::{CoreError, CoreResult};
+use crate::types::{
+    CoreError, CoreResult, RemoteConfig, RemoteErrorKind, RemoteSessionState, RemoteSessionStatus,
+};
 
 #[derive(Debug, Clone)]
 pub struct LldbSession {
@@ -100,4 +102,125 @@ fn has_attach_permission() -> bool {
     }
 
     true
+}
+
+#[derive(Debug, Clone)]
+pub struct RemoteSessionManager {
+    status: RemoteSessionStatus,
+    retry_remaining: u8,
+    retry_delay_ms: u64,
+}
+
+impl RemoteSessionManager {
+    pub fn new() -> Self {
+        Self {
+            status: RemoteSessionStatus::disconnected(),
+            retry_remaining: 0,
+            retry_delay_ms: 200,
+        }
+    }
+
+    pub fn status(&self) -> RemoteSessionStatus {
+        self.status.clone()
+    }
+
+    pub fn begin_connect(&mut self, config: &RemoteConfig) {
+        self.retry_remaining = config.retry_count;
+        self.status = RemoteSessionStatus {
+            state: RemoteSessionState::Connecting,
+            endpoint: Some(config.endpoint.clone()),
+            session_id: None,
+            error: None,
+            message: "Connecting to x64dbg remote endpoint".to_string(),
+        };
+    }
+
+    pub fn mark_connected(&mut self, config: &RemoteConfig, session_id: String) {
+        self.retry_remaining = config.retry_count;
+        self.status = RemoteSessionStatus {
+            state: RemoteSessionState::Connected,
+            endpoint: Some(config.endpoint.clone()),
+            session_id: Some(session_id),
+            error: None,
+            message: "Remote session connected".to_string(),
+        };
+    }
+
+    pub fn mark_failed(
+        &mut self,
+        config: &RemoteConfig,
+        error: RemoteErrorKind,
+        message: impl Into<String>,
+    ) {
+        self.status = RemoteSessionStatus {
+            state: RemoteSessionState::Degraded,
+            endpoint: Some(config.endpoint.clone()),
+            session_id: None,
+            error: Some(error),
+            message: message.into(),
+        };
+    }
+
+    pub fn can_retry(&mut self) -> bool {
+        if self.retry_remaining == 0 {
+            return false;
+        }
+        self.retry_remaining -= 1;
+        true
+    }
+
+    pub fn retry_delay_ms(&self) -> u64 {
+        self.retry_delay_ms
+    }
+
+    pub fn disconnect(&mut self) {
+        self.retry_remaining = 0;
+        self.status = RemoteSessionStatus::disconnected();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RemoteSessionManager;
+    use crate::types::{RemoteConfig, RemoteErrorKind, RemoteSessionState};
+
+    #[test]
+    fn remote_session_transitions_from_connecting_to_connected() {
+        let mut manager = RemoteSessionManager::new();
+        let config = RemoteConfig {
+            endpoint: "mock://xdbg".to_string(),
+            retry_count: 2,
+            ..RemoteConfig::default()
+        };
+
+        manager.begin_connect(&config);
+        assert_eq!(manager.status().state, RemoteSessionState::Connecting);
+        manager.mark_connected(&config, "session-1".to_string());
+        assert_eq!(manager.status().state, RemoteSessionState::Connected);
+    }
+
+    #[test]
+    fn remote_session_retry_budget_is_consumed() {
+        let mut manager = RemoteSessionManager::new();
+        let config = RemoteConfig {
+            retry_count: 1,
+            ..RemoteConfig::default()
+        };
+
+        manager.begin_connect(&config);
+        assert!(manager.can_retry());
+        assert!(!manager.can_retry());
+    }
+
+    #[test]
+    fn remote_session_failure_marks_degraded() {
+        let mut manager = RemoteSessionManager::new();
+        let config = RemoteConfig::default();
+        manager.begin_connect(&config);
+        manager.mark_failed(&config, RemoteErrorKind::Timeout, "timeout");
+
+        let status = manager.status();
+        assert_eq!(status.state, RemoteSessionState::Degraded);
+        assert_eq!(status.error, Some(RemoteErrorKind::Timeout));
+    }
 }

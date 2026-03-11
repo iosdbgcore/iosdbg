@@ -9,6 +9,7 @@ use crate::core::types::SessionLifecycle;
 use crate::core::{spawn_debugger_core, CoreChannels};
 use crate::types::{
     AssemblyInstruction, AttachErrorKind, DebugCommand, ExecutionState, RegisterValue,
+    RemoteSessionStatus, RemoteSessionState,
 };
 use crate::ui::assembly_view::show_assembly_view;
 use crate::ui::control_panel::{show_control_panel, ControlPanelState};
@@ -37,6 +38,7 @@ pub struct DebuggerApp {
     attach_lifecycle: SessionLifecycle,
     attach_error: Option<AttachErrorKind>,
     attached_target: Option<String>,
+    remote_status: RemoteSessionStatus,
 }
 
 impl DebuggerApp {
@@ -63,6 +65,7 @@ impl DebuggerApp {
             attach_lifecycle: SessionLifecycle::Detached,
             attach_error: None,
             attached_target: None,
+            remote_status: RemoteSessionStatus::disconnected(),
         }
     }
 
@@ -120,6 +123,12 @@ impl DebuggerApp {
                 self.memory_address = address;
                 self.memory_bytes = bytes;
             }
+            DebugEvent::RemoteSessionChanged(status) => {
+                self.remote_status = status;
+            }
+            DebugEvent::RemoteCommandDispatched(result) => {
+                self.status_message = Some(result.message);
+            }
             DebugEvent::StateChanged(state) => {
                 self.execution_state = state;
             }
@@ -146,6 +155,7 @@ impl eframe::App for DebuggerApp {
                     self.execution_state,
                     self.loaded_binary.as_ref(),
                     self.attached_target.as_deref(),
+                    &self.remote_status,
                 );
 
                 if let Some(path) = controls.load_binary {
@@ -163,6 +173,24 @@ impl eframe::App for DebuggerApp {
                 if controls.continue_exec {
                     self.send_command(DebugCommand::Continue);
                 }
+                if controls.pause_exec {
+                    self.send_command(DebugCommand::Pause);
+                }
+                if controls.read_registers {
+                    self.send_command(DebugCommand::ReadRegisters);
+                }
+                if let Some(config) = controls.connect_remote {
+                    self.send_command(DebugCommand::ConnectRemote(config));
+                }
+                if controls.disconnect_remote {
+                    self.send_command(DebugCommand::DisconnectRemote);
+                }
+                if controls.read_memory {
+                    self.send_command(DebugCommand::ReadMemory {
+                        address: self.memory_address,
+                        size: self.memory_viewer_state.page_size(),
+                    });
+                }
                 if controls.refresh_state {
                     self.send_command(DebugCommand::RefreshState);
                 }
@@ -178,6 +206,7 @@ impl eframe::App for DebuggerApp {
                     self.attach_lifecycle,
                     self.attach_error,
                     self.attached_target.as_deref(),
+                    &self.remote_status,
                 );
             });
 
@@ -233,6 +262,16 @@ impl eframe::App for DebuggerApp {
                 });
             });
         });
+
+        if self.remote_status.state == RemoteSessionState::Degraded
+            && self
+                .status_message
+                .as_deref()
+                .map(|msg| !msg.contains("Remote"))
+                .unwrap_or(true)
+        {
+            self.status_message = Some(format!("Remote degraded: {}", self.remote_status.message));
+        }
     }
 }
 

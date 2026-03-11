@@ -2,21 +2,32 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::thread;
+use std::time::Duration;
 
-use crate::core::session::LldbSession;
-use crate::core::types::{describe_attach_target, validate_attach_request, SessionLifecycle};
+use crate::core::remote::xdbg_adapter::XdbgRemoteAdapter;
+use crate::core::session::{LldbSession, RemoteSessionManager};
+use crate::core::types::{
+    classify_remote_error, describe_attach_target, validate_attach_request, validate_remote_config,
+    SessionLifecycle,
+};
 use crate::types::{
     AssemblyInstruction, AttachErrorKind, AttachRequest, AttachResult, CoreError, CoreResult,
-    DebuggerSnapshot, ExecutionState, MemorySnapshot, RegisterValue,
+    DebuggerSnapshot, ExecutionState, MemorySnapshot, RegisterValue, RemoteCommand, RemoteConfig,
+    RemoteSessionStatus,
 };
 
 pub trait DebugEngine: Send {
     fn load_binary(&mut self, binary_path: PathBuf) -> CoreResult<()>;
     fn attach_process(&mut self, request: AttachRequest) -> CoreResult<AttachResult>;
+    fn connect_remote(&mut self, config: RemoteConfig) -> CoreResult<RemoteSessionStatus>;
+    fn disconnect_remote(&mut self);
+    fn remote_session_status(&self) -> RemoteSessionStatus;
     fn attach_lifecycle(&self) -> SessionLifecycle;
     fn step_in(&mut self) -> CoreResult<Option<u64>>;
     fn step_over(&mut self) -> CoreResult<Option<u64>>;
     fn continue_exec(&mut self) -> CoreResult<Option<u64>>;
+    fn pause_exec(&mut self) -> CoreResult<Option<u64>>;
     fn toggle_breakpoint(&mut self, address: u64) -> CoreResult<()>;
     fn read_registers(&self) -> CoreResult<Vec<RegisterValue>>;
     fn read_memory(&mut self, address: u64, size: usize) -> CoreResult<MemorySnapshot>;
@@ -24,8 +35,18 @@ pub trait DebugEngine: Send {
     fn snapshot(&self) -> DebuggerSnapshot;
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EngineBackend {
+    Local,
+    Remote,
+}
+
 pub struct MockLldbEngine {
     session: LldbSession,
+    remote_session: RemoteSessionManager,
+    remote_adapter: XdbgRemoteAdapter,
+    remote_config: Option<RemoteConfig>,
+    backend: EngineBackend,
     binary_path: Option<PathBuf>,
     binary_bytes: Vec<u8>,
     instructions: Vec<AssemblyInstruction>,
@@ -40,6 +61,10 @@ impl MockLldbEngine {
     pub fn new() -> CoreResult<Self> {
         Ok(Self {
             session: LldbSession::initialize()?,
+            remote_session: RemoteSessionManager::new(),
+            remote_adapter: XdbgRemoteAdapter::new(),
+            remote_config: None,
+            backend: EngineBackend::Local,
             binary_path: None,
             binary_bytes: Vec::new(),
             instructions: Vec::new(),
@@ -201,6 +226,42 @@ impl MockLldbEngine {
             AttachErrorKind::LldbError
         }
     }
+
+    fn current_remote_config(&self) -> CoreResult<&RemoteConfig> {
+        self.remote_config
+            .as_ref()
+            .ok_or_else(|| CoreError::new("Remote config is unavailable"))
+    }
+
+    fn dispatch_remote_command(&mut self, command: RemoteCommand) -> CoreResult<()> {
+        let config = self.current_remote_config()?.clone();
+        match self.remote_adapter.dispatch(command) {
+            Ok(result) => {
+                self.remote_session.mark_connected(
+                    &config,
+                    self.remote_adapter
+                        .session_id()
+                        .unwrap_or("xdbg-session")
+                        .to_string(),
+                );
+                self.state = if matches!(command, RemoteCommand::Continue) {
+                    ExecutionState::Running
+                } else {
+                    ExecutionState::Paused
+                };
+                if !result.success {
+                    return Err(CoreError::new(result.message));
+                }
+                Ok(())
+            }
+            Err(error) => {
+                self.remote_session
+                    .mark_failed(&config, error.kind, error.message.clone());
+                self.backend = EngineBackend::Local;
+                Err(CoreError::new(error.message))
+            }
+        }
+    }
 }
 
 impl DebugEngine for MockLldbEngine {
@@ -221,6 +282,10 @@ impl DebugEngine for MockLldbEngine {
         self.binary_bytes = if bytes.is_empty() { vec![0; 64] } else { bytes };
         self.instructions = Self::decode_disassembly(&self.binary_bytes);
         self.breakpoints.clear();
+        self.backend = EngineBackend::Local;
+        self.remote_config = None;
+        self.remote_adapter.disconnect();
+        self.remote_session.disconnect();
         self.binary_path = Some(binary_path);
         self.attached_target_label = None;
         self.session.detach();
@@ -255,6 +320,10 @@ impl DebugEngine for MockLldbEngine {
         let target_label = describe_attach_target(&request);
         match self.session.attach_to_process(&request) {
             Ok(attached_target) => {
+                self.backend = EngineBackend::Local;
+                self.remote_config = None;
+                self.remote_adapter.disconnect();
+                self.remote_session.disconnect();
                 self.attached_target_label = Some(attached_target.clone());
                 self.binary_path = None;
                 self.binary_bytes = Self::disassembly_seed_from_target(&target_label);
@@ -273,12 +342,71 @@ impl DebugEngine for MockLldbEngine {
         }
     }
 
+    fn connect_remote(&mut self, config: RemoteConfig) -> CoreResult<RemoteSessionStatus> {
+        validate_remote_config(&config)
+            .map_err(|error| CoreError::new(format!("Invalid remote config: {error}")))?;
+        self.remote_session.begin_connect(&config);
+        self.remote_config = Some(config.clone());
+
+        loop {
+            match self.remote_adapter.connect(&config) {
+                Ok(session_id) => {
+                    self.remote_session.mark_connected(&config, session_id);
+                    self.backend = EngineBackend::Remote;
+                    self.binary_path = None;
+                    self.attached_target_label = Some(format!("xdbg-remote@{}", config.endpoint));
+                    self.binary_bytes = Self::disassembly_seed_from_target(&config.endpoint);
+                    self.instructions = Self::decode_disassembly(&self.binary_bytes);
+                    self.breakpoints.clear();
+                    self.pc_index = 0;
+                    self.state = ExecutionState::Paused;
+                    self.refresh_state_window();
+                    return Ok(self.remote_session.status());
+                }
+                Err(error) => {
+                    self.remote_session
+                        .mark_failed(&config, error.kind, error.message.clone());
+                    if self.remote_session.can_retry() {
+                        thread::sleep(Duration::from_millis(self.remote_session.retry_delay_ms()));
+                        continue;
+                    }
+                    self.backend = EngineBackend::Local;
+                    return Ok(self.remote_session.status());
+                }
+            }
+        }
+    }
+
+    fn disconnect_remote(&mut self) {
+        self.remote_adapter.disconnect();
+        self.remote_session.disconnect();
+        self.remote_config = None;
+        if self.backend == EngineBackend::Remote {
+            self.backend = EngineBackend::Local;
+            self.attached_target_label = None;
+            self.state = ExecutionState::NoTarget;
+            self.instructions.clear();
+            self.breakpoints.clear();
+            self.memory = MemorySnapshot {
+                address: Self::base_address(),
+                bytes: vec![0; 0x100],
+            };
+        }
+    }
+
+    fn remote_session_status(&self) -> RemoteSessionStatus {
+        self.remote_session.status()
+    }
+
     fn attach_lifecycle(&self) -> SessionLifecycle {
         self.session.lifecycle()
     }
 
     fn step_in(&mut self) -> CoreResult<Option<u64>> {
         self.ensure_target()?;
+        if self.backend == EngineBackend::Remote {
+            self.dispatch_remote_command(RemoteCommand::StepIn)?;
+        }
         let pc = self.advance_one_instruction();
         self.refresh_state_window();
         Ok(pc)
@@ -290,6 +418,9 @@ impl DebugEngine for MockLldbEngine {
 
     fn continue_exec(&mut self) -> CoreResult<Option<u64>> {
         self.ensure_target()?;
+        if self.backend == EngineBackend::Remote {
+            self.dispatch_remote_command(RemoteCommand::Continue)?;
+        }
         self.state = ExecutionState::Running;
 
         while let Some(pc) = self.advance_one_instruction() {
@@ -309,6 +440,16 @@ impl DebugEngine for MockLldbEngine {
         Ok(None)
     }
 
+    fn pause_exec(&mut self) -> CoreResult<Option<u64>> {
+        self.ensure_target()?;
+        if self.backend == EngineBackend::Remote {
+            self.dispatch_remote_command(RemoteCommand::Pause)?;
+        }
+        self.state = ExecutionState::Paused;
+        self.refresh_state_window();
+        Ok(self.current_pc())
+    }
+
     fn toggle_breakpoint(&mut self, address: u64) -> CoreResult<()> {
         self.ensure_target()?;
 
@@ -323,11 +464,23 @@ impl DebugEngine for MockLldbEngine {
 
     fn read_registers(&self) -> CoreResult<Vec<RegisterValue>> {
         self.ensure_target()?;
+        if self.backend == EngineBackend::Remote {
+            if let Err(error) = self.remote_adapter.dispatch(RemoteCommand::ReadRegisters) {
+                let kind = classify_remote_error(&error.message);
+                return Err(CoreError::new(format!(
+                    "Remote read-register failed ({kind}): {}",
+                    error.message
+                )));
+            }
+        }
         Ok(self.computed_registers())
     }
 
     fn read_memory(&mut self, address: u64, size: usize) -> CoreResult<MemorySnapshot> {
         self.ensure_target()?;
+        if self.backend == EngineBackend::Remote {
+            self.dispatch_remote_command(RemoteCommand::ReadMemory { address, size })?;
+        }
 
         let base = Self::base_address();
         let offset = address.saturating_sub(base) as usize;
@@ -356,6 +509,7 @@ impl DebugEngine for MockLldbEngine {
             breakpoints: self.breakpoints.clone(),
             registers: self.computed_registers(),
             memory: self.memory.clone(),
+            remote: self.remote_session.status(),
         }
     }
 }
@@ -370,7 +524,9 @@ mod tests {
 
     use super::{DebugEngine, MockLldbEngine};
     use crate::core::types::SessionLifecycle;
-    use crate::types::{AttachErrorKind, AttachRequest, ExecutionState};
+    use crate::types::{
+        AttachErrorKind, AttachRequest, ExecutionState, RemoteConfig, RemoteSessionState,
+    };
 
     #[test]
     fn loads_arm64_sample_and_disassembles() {
@@ -506,5 +662,41 @@ mod tests {
             .expect("set breakpoint should work");
         let _ = engine.continue_exec().expect("continue should work");
         thread::sleep(Duration::from_millis(5));
+    }
+
+    #[test]
+    fn remote_connect_and_disconnect_update_session_status() {
+        let mut engine = MockLldbEngine::new().expect("engine should initialize");
+        let config = RemoteConfig {
+            endpoint: "mock://xdbg".to_string(),
+            ..RemoteConfig::default()
+        };
+
+        let status = engine
+            .connect_remote(config.clone())
+            .expect("remote connect should produce status");
+        assert_eq!(status.state, RemoteSessionState::Connected);
+
+        engine.disconnect_remote();
+        assert_eq!(
+            engine.remote_session_status().state,
+            RemoteSessionState::Disconnected
+        );
+    }
+
+    #[test]
+    fn remote_connect_reports_degraded_status_for_bad_token() {
+        let mut engine = MockLldbEngine::new().expect("engine should initialize");
+        let config = RemoteConfig {
+            endpoint: "mock://xdbg".to_string(),
+            token: Some("bad-token".to_string()),
+            retry_count: 0,
+            ..RemoteConfig::default()
+        };
+
+        let status = engine
+            .connect_remote(config)
+            .expect("remote connect should return status");
+        assert_eq!(status.state, RemoteSessionState::Degraded);
     }
 }

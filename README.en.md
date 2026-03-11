@@ -10,6 +10,7 @@ A modern visual debugging tool that provides an intuitive graphical interface fo
 
 - **Binary Loading** - Load and parse executable files
 - **Attach Process Debugging** - Attach by PID or process name to a running process
+- **x64dbg Remote Integration** - Connect by endpoint/token and forward core debug actions to remote
 - **Breakpoint Management** - Set, delete, and manage breakpoints
 - **Execution Control** - Step execution, continue, pause debugging
 - **Register Inspection** - Real-time view and monitor CPU register states
@@ -88,8 +89,9 @@ cargo run --release
 After launching, use the graphical interface:
 1. Click the "Load Binary" button to select an executable file to debug
 2. Or select PID/process name in the control bar and click Attach
-3. Set breakpoints and start debugging
-4. Use the control panel for step execution, continue, and other operations
+3. Or configure remote endpoint/token in the control bar and click Connect
+4. Set breakpoints and start debugging
+5. Use the control panel for step execution, continue, and other operations
 
 ### Attach Preconditions and Troubleshooting
 
@@ -122,6 +124,7 @@ For detailed technical specifications and usage instructions, please refer to:
 - [x64dbg Parity Baseline](./docs/ui/x64dbg-parity-baseline.md)
 - [x64dbg Reuse Feasibility and Deltas](./docs/ui/x64dbg-reuse-feasibility.md)
 - [x64dbg Rewrite Regression Checklist](./docs/ui/x64dbg-regression-checklist.md)
+- [x64dbg Remote Integration Guide](./docs/xdbg-remote-integration.md)
 - [CI/CD Guide](./docs/ci-cd.md)
 
 ## Contributing

@@ -1,4 +1,6 @@
-use crate::types::{AttachErrorKind, AttachRequest, AttachTarget};
+use crate::types::{
+    AttachErrorKind, AttachRequest, AttachTarget, RemoteConfig, RemoteErrorKind,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionLifecycle {
@@ -94,9 +96,37 @@ pub fn validate_attach_request(request: &AttachRequest) -> Result<(), AttachErro
     }
 }
 
+pub fn validate_remote_config(config: &RemoteConfig) -> Result<(), RemoteErrorKind> {
+    if config.endpoint.trim().is_empty() {
+        return Err(RemoteErrorKind::ProtocolError);
+    }
+
+    if config.timeout_ms == 0 {
+        return Err(RemoteErrorKind::Timeout);
+    }
+
+    Ok(())
+}
+
+pub fn classify_remote_error(message: &str) -> RemoteErrorKind {
+    let normalized = message.to_ascii_lowercase();
+    if normalized.contains("auth") || normalized.contains("token") {
+        RemoteErrorKind::AuthFailed
+    } else if normalized.contains("timeout") {
+        RemoteErrorKind::Timeout
+    } else if normalized.contains("protocol") || normalized.contains("invalid endpoint") {
+        RemoteErrorKind::ProtocolError
+    } else {
+        RemoteErrorKind::ConnectionFailed
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{SessionLifecycle, SessionStateMachine};
+    use super::{
+        classify_remote_error, validate_remote_config, SessionLifecycle, SessionStateMachine,
+    };
+    use crate::types::{RemoteConfig, RemoteErrorKind};
 
     #[test]
     fn session_state_machine_validates_transition_order() {
@@ -120,5 +150,29 @@ mod tests {
             .expect_err("detached -> attached should fail");
         assert!(error.contains("Invalid lifecycle transition"));
         assert_eq!(machine.lifecycle(), SessionLifecycle::Detached);
+    }
+
+    #[test]
+    fn rejects_remote_config_with_empty_endpoint() {
+        let config = RemoteConfig {
+            endpoint: " ".to_string(),
+            ..RemoteConfig::default()
+        };
+        assert_eq!(
+            validate_remote_config(&config),
+            Err(RemoteErrorKind::ProtocolError)
+        );
+    }
+
+    #[test]
+    fn classifies_remote_error_messages() {
+        assert_eq!(
+            classify_remote_error("authentication token mismatch"),
+            RemoteErrorKind::AuthFailed
+        );
+        assert_eq!(
+            classify_remote_error("request timeout"),
+            RemoteErrorKind::Timeout
+        );
     }
 }

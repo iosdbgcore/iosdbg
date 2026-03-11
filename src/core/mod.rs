@@ -1,5 +1,6 @@
 pub mod engine;
 pub mod events;
+pub mod remote;
 pub mod session;
 pub mod types;
 
@@ -49,6 +50,7 @@ impl DebuggerCore {
             address: snapshot.memory.address,
             bytes: snapshot.memory.bytes,
         });
+        self.send(DebugEvent::RemoteSessionChanged(snapshot.remote));
     }
 
     fn process_step_result(
@@ -114,6 +116,29 @@ impl DebuggerCore {
                 }
                 true
             }
+            DebugCommand::ConnectRemote(config) => {
+                match self.engine.connect_remote(config) {
+                    Ok(status) => {
+                        self.send(DebugEvent::RemoteSessionChanged(status.clone()));
+                        if status.state == crate::types::RemoteSessionState::Connected {
+                            self.send(DebugEvent::AttachLifecycleChanged(
+                                self.engine.attach_lifecycle(),
+                            ));
+                            self.emit_snapshot();
+                        } else {
+                            self.send(DebugEvent::Error(status.message));
+                        }
+                    }
+                    Err(error) => self.send(DebugEvent::Error(error.message)),
+                }
+                true
+            }
+            DebugCommand::DisconnectRemote => {
+                self.engine.disconnect_remote();
+                self.send(DebugEvent::RemoteSessionChanged(self.engine.remote_session_status()));
+                self.emit_snapshot();
+                true
+            }
             DebugCommand::ToggleBreakpoint(address) => {
                 match self.engine.toggle_breakpoint(address) {
                     Ok(()) => self.emit_snapshot(),
@@ -134,6 +159,18 @@ impl DebuggerCore {
             DebugCommand::Continue => {
                 let result = self.engine.continue_exec();
                 self.process_continue_result(result);
+                true
+            }
+            DebugCommand::Pause => {
+                let result = self.engine.pause_exec();
+                self.process_step_result(result, false);
+                true
+            }
+            DebugCommand::ReadRegisters => {
+                match self.engine.read_registers() {
+                    Ok(registers) => self.send(DebugEvent::RegistersUpdated(registers)),
+                    Err(error) => self.send(DebugEvent::Error(error.message)),
+                }
                 true
             }
             DebugCommand::RefreshState => {
@@ -179,6 +216,9 @@ pub fn spawn_debugger_core() -> CoreResult<CoreChannels> {
             engine.attach_lifecycle(),
         ))
         .map_err(|error| CoreError::new(format!("Failed to send initial attach state: {error}")))?;
+    event_tx
+        .send(DebugEvent::RemoteSessionChanged(engine.remote_session_status()))
+        .map_err(|error| CoreError::new(format!("Failed to send initial remote state: {error}")))?;
 
     thread::spawn(move || {
         let mut core = DebuggerCore::new(Box::new(engine), event_tx);

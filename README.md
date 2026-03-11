@@ -10,6 +10,7 @@
 
 - **二进制加载** - 支持加载和解析可执行文件
 - **附加进程调试** - 支持按 PID 或进程名附加到运行中进程
+- **x64dbg 远程接入** - 支持通过 endpoint/token 连接远程会话并透传核心调试动作
 - **断点管理** - 设置、删除和管理断点
 - **执行控制** - 单步执行、继续运行、暂停调试
 - **寄存器查看** - 实时查看和监控 CPU 寄存器状态
@@ -88,8 +89,9 @@ cargo run --release
 启动后，使用图形界面：
 1. 点击"加载二进制"按钮选择要调试的可执行文件
 2. 或在控制栏中选择 PID/进程名后点击 Attach，附加到运行中的目标进程
-3. 设置断点并开始调试
-4. 使用控制面板进行单步执行、继续运行等操作
+3. 或在控制栏配置 Remote endpoint/token 后点击 Connect，接入 x64dbg 远程会话
+4. 设置断点并开始调试
+5. 使用控制面板进行单步执行、继续运行等操作
 
 ### 附加调试前置条件与排障
 
@@ -122,6 +124,7 @@ cargo run --release
 - [x64dbg 同构 UI 基线](./docs/ui/x64dbg-parity-baseline.md)
 - [x64dbg 复用可行性与差异说明](./docs/ui/x64dbg-reuse-feasibility.md)
 - [x64dbg 重写回归检查清单](./docs/ui/x64dbg-regression-checklist.md)
+- [x64dbg 远程接入说明](./docs/xdbg-remote-integration.md)
 - [CI/CD 指南](./docs/ci-cd.md)
 
 ## 贡献指南
