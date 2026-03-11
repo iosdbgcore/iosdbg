@@ -1,0 +1,32 @@
+version: "1.0"
+name: "iosDbg"
+displayName: "iosDbg"
+description: "iosDbg 仓库索引（当前仓库尚未提交项目文件）"
+indexedAt: "2026-03-10"
+generatedBy: "codex-cli"
+
+quickRef:
+  catalogs:
+    - id: "entryPoints"
+      title: "入口点"
+      desc: "不同用途的主要入口点"
+    - id: "configFiles"
+      title: "配置文件"
+      desc: "关键配置文件"
+    - id: "directories"
+      title: "目录结构"
+      desc: "重要目录"
+    - id: "features"
+      title: "功能模块"
+      desc: "项目的主要功能模块"
+
+  entryPoints: []
+
+  configFiles: []
+
+  directories:
+    - title: "仓库根目录"
+      desc: "当前仅包含 Git 元数据，尚未添加项目源码或子目录"
+      path: "."
+
+  features: []
