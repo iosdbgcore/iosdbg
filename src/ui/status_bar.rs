@@ -17,7 +17,7 @@ pub fn show_status_bar(
         if let Some(target) = attached_target {
             ui.separator();
             ui.monospace(
-                RichText::new(format!("Target: {target}")).color(Color32::from_rgb(171, 191, 212)),
+                RichText::new(format!("Target: {target}")).color(Color32::from_rgb(220, 225, 230)),
             );
         }
 
@@ -31,17 +31,17 @@ pub fn show_status_bar(
 
         if let Some(message) = status_message {
             ui.separator();
-            ui.label(RichText::new(message).color(Color32::from_rgb(214, 221, 230)));
+            ui.label(RichText::new(message).color(Color32::from_rgb(220, 225, 230)));
         }
     });
 }
 
 fn lifecycle_badge(lifecycle: SessionLifecycle) -> (&'static str, Color32) {
     match lifecycle {
-        SessionLifecycle::Detached => ("Attach: Detached", Color32::from_rgb(164, 164, 164)),
-        SessionLifecycle::Attaching => ("Attach: Attaching", Color32::from_rgb(242, 183, 95)),
-        SessionLifecycle::Attached => ("Attach: Attached", Color32::from_rgb(121, 201, 139)),
-        SessionLifecycle::Failed => ("Attach: Failed", Color32::from_rgb(229, 88, 88)),
+        SessionLifecycle::Detached => ("Attach: Detached", Color32::from_rgb(200, 200, 200)),
+        SessionLifecycle::Attaching => ("Attach: Attaching", Color32::from_rgb(250, 210, 140)),
+        SessionLifecycle::Attached => ("Attach: Attached", Color32::from_rgb(180, 220, 180)),
+        SessionLifecycle::Failed => ("Attach: Failed", Color32::from_rgb(240, 140, 140)),
     }
 }
 

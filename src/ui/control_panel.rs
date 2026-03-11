@@ -135,14 +135,14 @@ pub fn show_control_panel(
         ui.label(RichText::new(label).strong().color(color));
 
         if let Some(target) = attached_target {
-            ui.monospace(RichText::new(target).color(Color32::from_rgb(175, 193, 208)));
+            ui.monospace(RichText::new(target).color(Color32::from_rgb(200, 210, 220)));
         } else if let Some(path) = loaded_binary {
             ui.monospace(
-                RichText::new(path.display().to_string()).color(Color32::from_rgb(175, 193, 208)),
+                RichText::new(path.display().to_string()).color(Color32::from_rgb(200, 210, 220)),
             );
         } else {
             ui.monospace(
-                RichText::new("No target attached").color(Color32::from_rgb(122, 138, 150)),
+                RichText::new("No target attached").color(Color32::from_rgb(200, 200, 200)),
             );
         }
     });
@@ -174,11 +174,11 @@ fn derive_attach_request(
 
 fn state_badge(state: ExecutionState) -> (&'static str, Color32) {
     match state {
-        ExecutionState::NoTarget => ("State: No Target", Color32::from_rgb(170, 170, 170)),
-        ExecutionState::Loaded => ("State: Loaded", Color32::from_rgb(117, 196, 237)),
-        ExecutionState::Running => ("State: Running", Color32::from_rgb(135, 218, 129)),
-        ExecutionState::Paused => ("State: Paused", Color32::from_rgb(243, 209, 121)),
-        ExecutionState::Exited => ("State: Exited", Color32::from_rgb(242, 142, 142)),
+        ExecutionState::NoTarget => ("State: No Target", Color32::from_rgb(200, 200, 200)),
+        ExecutionState::Loaded => ("State: Loaded", Color32::from_rgb(150, 210, 245)),
+        ExecutionState::Running => ("State: Running", Color32::from_rgb(180, 230, 180)),
+        ExecutionState::Paused => ("State: Paused", Color32::from_rgb(250, 220, 150)),
+        ExecutionState::Exited => ("State: Exited", Color32::from_rgb(250, 180, 180)),
     }
 }
 
